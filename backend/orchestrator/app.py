@@ -203,6 +203,82 @@ app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"))
 # Allow your frontend origin (adjust if needed). Using "*" is OK for local dev.
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+# --- DATABASE INITIALIZATION ---
+def init_database():
+    """Initialize mock_bank.db with test customers on app startup"""
+    import sys
+    import random
+    from faker import Faker
+    
+    # Database location: same directory as app.py's parent (orchestrator)
+    db_path = os.path.join(os.path.dirname(BASE_DIR), 'mock_bank.db')
+    
+    if os.path.exists(db_path):
+        # Database already exists
+        return db_path
+    
+    print(f"Creating database at: {db_path}")
+    
+    try:
+        fake = Faker('en_IN')
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        
+        # Create customers table
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS customers (
+                pan TEXT PRIMARY KEY,
+                name TEXT,
+                credit_score INTEGER,
+                pre_approved_limit INTEGER,
+                address TEXT,
+                phone TEXT
+            )
+        ''')
+        
+        # Add edge case test data
+        edge_cases = [
+            ("ABCDE1000F", "Aarush Luthra", 850, 500000, "123, Tech Park, Bangalore", "9999999990"),
+            ("ABCDE2000F", "Rohan Das", 600, 100000, "45, Old City, Delhi", "9999999991"),
+            ("ABCDE3000F", "Priya Sharma", 750, 200000, "78, Sea Link, Mumbai", "9999999992"),
+            ("ABCDE4000F", "Unknown User", 700, 200000, "00, Nowhere", "9999999993"),
+            ("ABCDE5000F", "Vikram Singh", 720, 300000, "12, Fort Road, Jaipur", "9999999994"),
+        ]
+        
+        c.executemany('INSERT OR REPLACE INTO customers VALUES (?,?,?,?,?,?)', edge_cases)
+        
+        # Add 1000 random test customers
+        print("Generating 1000 test customers...")
+        random_users = []
+        for _ in range(1000):
+            pan = "".join(random.choices("ABCDEFGHIJKLMNOPQRSTUVWXYZ", k=5)) + \
+                str(random.randint(1000, 9999)) + \
+                random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            
+            name = fake.name()
+            score = random.randint(300, 900)
+            limit = random.choice([50000, 100000, 200000, 500000, 1000000])
+            address = fake.address().replace('\n', ', ')
+            phone = f"9{random.randint(100000000, 999999999)}"
+            
+            random_users.append((pan, name, score, limit, address, phone))
+        
+        c.executemany('INSERT OR REPLACE INTO customers VALUES (?,?,?,?,?,?)', random_users)
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Database initialized successfully at: {db_path}")
+        return db_path
+        
+    except Exception as e:
+        print(f"❌ Error initializing database: {e}")
+        import traceback
+        traceback.print_exc()
+        return db_path
+
+# Initialize database on app startup
+DB_PATH = init_database()
+
 # Serve frontend
 FRONTEND_DIR = os.path.join(os.path.dirname(BASE_DIR), "..", "frontend")
 

@@ -24,28 +24,18 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:5000")
 # This allows the tools to work on Render where internal localhost calls fail
 
 def get_db_path_for_tools():
-    """Find the mock_bank.db database file - checks all possible locations"""
-    # From tools.py at /app/backend/orchestrator/agents/tools.py, need to go up 3 levels to /app/backend
-    tools_dir = os.path.dirname(os.path.abspath(__file__))  # /app/backend/orchestrator/agents
-    agents_dir = os.path.dirname(tools_dir)  # /app/backend/orchestrator/agents -> /app/backend/orchestrator
-    orchestrator_dir = os.path.dirname(agents_dir)  # /app/backend/orchestrator -> /app/backend
+    """Find the mock_bank.db database file at /app/backend/mock_bank.db"""
+    # The database is always created at /app/backend/mock_bank.db by app.py init_database()
+    # Tools are in /app/backend/orchestrator/agents/tools.py, so go up 3 levels to /app/backend
     
-    # Try these paths in order
-    possible_paths = [
-        os.path.join(orchestrator_dir, 'mock_bank.db'),  # /app/backend/mock_bank.db - CORRECT
-        '/app/backend/mock_bank.db',  # Render standard location
-        '/app/mock_bank.db',  # Root fallback
-        'mock_bank.db',  # Current directory
-    ]
+    tools_file = os.path.abspath(__file__)  # /app/backend/orchestrator/agents/tools.py
+    tools_dir = os.path.dirname(tools_file)  # /app/backend/orchestrator/agents
+    agents_dir = os.path.dirname(tools_dir)  # /app/backend/orchestrator
+    orchestrator_dir = os.path.dirname(agents_dir)  # /app/backend
     
-    for path in possible_paths:
-        if os.path.exists(path):
-            logger.info(f"Database found at: {path}")
-            return path
+    db_path = os.path.join(orchestrator_dir, 'mock_bank.db')  # /app/backend/mock_bank.db
     
-    # If none exist, return the most likely location (Render default)
-    logger.warning(f"Database not found in any location. Will try: {possible_paths[0]}")
-    return possible_paths[0]
+    return db_path
 
 def get_customer_direct(pan: str):
     """Direct database lookup instead of HTTP call"""
