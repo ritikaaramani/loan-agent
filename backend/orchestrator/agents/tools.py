@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 pdf_service = PDFService()
 db_service = DBService()
 
-CRM_URL = "http://localhost:5001"
-CREDIT_URL = "http://localhost:5002"
-OFFER_URL = "http://localhost:5003"
+CRM_URL = "http://localhost:5000"
+CREDIT_URL = "http://localhost:5000"
+OFFER_URL = "http://localhost:5000"
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:5000")
 
 # ================= PYDANTIC MODELS FOR VALIDATION =================

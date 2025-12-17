@@ -3,6 +3,7 @@ import os
 import json
 import traceback
 import re
+import sqlite3
 from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -216,6 +217,81 @@ def serve_frontend(path):
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "pdf_dir": PDF_DIR})
+
+# ==================== EMBEDDED MOCK SERVICES ====================
+
+# Helper: Get customer from database
+def get_customer_from_db(pan):
+    """Fetch customer record from mock_bank.db"""
+    try:
+        if not os.path.exists(os.path.join(os.path.dirname(BASE_DIR), 'mock_bank.db')):
+            return None
+        conn = sqlite3.connect(os.path.join(os.path.dirname(BASE_DIR), 'mock_bank.db'))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM customers WHERE pan=?", (pan,))
+        user = cursor.fetchone()
+        conn.close()
+        return user
+    except Exception as e:
+        print(f"Database error: {e}")
+        return None
+
+# CRM Service: Verify KYC
+@app.route("/verify-kyc", methods=["POST"])
+def verify_kyc():
+    """CRM verification endpoint"""
+    try:
+        pan = request.json.get('pan', '')
+        user = get_customer_from_db(pan)
+        
+        if user:
+            return jsonify({
+                "status": "verified",
+                "message": "KYC verification complete",
+                "name": user['name'],
+                "pan": pan
+            }), 200
+        return jsonify({"status": "failed", "reason": "PAN not found in CRM"}), 404
+    except Exception as e:
+        print(f"KYC verification error: {e}")
+        return jsonify({"status": "error", "reason": str(e)}), 500
+
+# Credit Bureau Service: Get credit score
+@app.route("/get-score", methods=["POST"])
+def get_credit_score():
+    """Credit Bureau endpoint"""
+    try:
+        pan = request.json.get('pan')
+        if not pan:
+            return jsonify({"error": "PAN is required"}), 400
+        
+        user = get_customer_from_db(pan)
+        if user:
+            return jsonify({"credit_score": user['credit_score']}), 200
+        return jsonify({"error": "User not found"}), 404
+    except Exception as e:
+        print(f"Credit score error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Offer Mart Service: Get pre-approved limit
+@app.route("/get-limit", methods=["POST"])
+def get_pre_approved_limit():
+    """Offer Mart endpoint"""
+    try:
+        pan = request.json.get('pan')
+        if not pan:
+            return jsonify({"error": "PAN is required"}), 400
+        
+        user = get_customer_from_db(pan)
+        if user:
+            return jsonify({"pre_approved_limit": user['pre_approved_limit']}), 200
+        return jsonify({"error": "User not found"}), 404
+    except Exception as e:
+        print(f"Pre-approved limit error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ==================== END EMBEDDED MOCK SERVICES ====================
 
 @app.route("/chat", methods=["POST"])
 def chat():
