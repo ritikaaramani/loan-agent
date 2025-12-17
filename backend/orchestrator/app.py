@@ -220,13 +220,34 @@ def health():
 
 # ==================== EMBEDDED MOCK SERVICES ====================
 
+# Determine database path (works on local dev and Render)
+def get_db_path():
+    """Find the mock_bank.db database file"""
+    # Try multiple locations in order of preference
+    possible_paths = [
+        os.path.join(os.path.dirname(BASE_DIR), 'mock_bank.db'),  # /app/backend/mock_bank.db
+        os.path.join(BASE_DIR, 'mock_bank.db'),  # /app/backend/orchestrator/mock_bank.db
+        '/app/backend/mock_bank.db',  # Render absolute path
+        '/app/mock_bank.db',  # Root level (shouldn't be here but just in case)
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            print(f"✅ Database found at: {path}")
+            return path
+    # If not found, return the most likely location (pre-deploy command creates it here)
+    print(f"⚠️ Database not found in any location. Using default: {possible_paths[0]}")
+    return possible_paths[0]
+
+DB_PATH = get_db_path()
+
 # Helper: Get customer from database
 def get_customer_from_db(pan):
     """Fetch customer record from mock_bank.db"""
     try:
-        if not os.path.exists(os.path.join(os.path.dirname(BASE_DIR), 'mock_bank.db')):
+        if not os.path.exists(DB_PATH):
+            print(f"❌ Database not found at: {DB_PATH}")
             return None
-        conn = sqlite3.connect(os.path.join(os.path.dirname(BASE_DIR), 'mock_bank.db'))
+        conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM customers WHERE pan=?", (pan,))
@@ -243,18 +264,23 @@ def verify_kyc():
     """CRM verification endpoint"""
     try:
         pan = request.json.get('pan', '')
+        print(f"🔍 KYC verification request for PAN: {pan}")
         user = get_customer_from_db(pan)
         
         if user:
+            print(f"✅ Customer found: {user['name']}")
             return jsonify({
                 "status": "verified",
                 "message": "KYC verification complete",
                 "name": user['name'],
                 "pan": pan
             }), 200
+        print(f"❌ PAN not found in database: {pan}")
         return jsonify({"status": "failed", "reason": "PAN not found in CRM"}), 404
     except Exception as e:
-        print(f"KYC verification error: {e}")
+        print(f"❌ KYC verification error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"status": "error", "reason": str(e)}), 500
 
 # Credit Bureau Service: Get credit score
