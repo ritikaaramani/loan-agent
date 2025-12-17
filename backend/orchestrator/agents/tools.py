@@ -2,6 +2,7 @@ import os
 import requests
 import json
 import logging
+import sqlite3
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field, validator
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -17,6 +18,40 @@ CRM_URL = "http://localhost:5000"
 CREDIT_URL = "http://localhost:5000"
 OFFER_URL = "http://localhost:5000"
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:5000")
+
+# ==================== EMBEDDED SERVICE HELPERS ====================
+# These functions directly access the database instead of making HTTP requests
+# This allows the tools to work on Render where internal localhost calls fail
+
+def get_db_path_for_tools():
+    """Find the mock_bank.db database file (same logic as app.py)"""
+    possible_paths = [
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'mock_bank.db'),  # /app/backend/mock_bank.db
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mock_bank.db'),  # local
+        '/app/backend/mock_bank.db',  # Render absolute path
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    return possible_paths[0]  # Return most likely location
+
+def get_customer_direct(pan: str):
+    """Direct database lookup instead of HTTP call"""
+    try:
+        db_path = get_db_path_for_tools()
+        if not os.path.exists(db_path):
+            logger.warning(f"Database not found at: {db_path}")
+            return None
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM customers WHERE pan=?", (pan,))
+        user = cursor.fetchone()
+        conn.close()
+        return dict(user) if user else None
+    except Exception as e:
+        logger.error(f"Direct database lookup error: {e}")
+        return None
 
 # ================= PYDANTIC MODELS FOR VALIDATION =================
 class UnderwritingInput(BaseModel):
@@ -109,31 +144,38 @@ def verification_agent_tool(pan: str):
         }
     
     try:
-        result = call_api_with_retry(
-            f"{CRM_URL}/verify-kyc",
-            {"pan": pan.upper()}
-        )
+        # Try direct database access first (works on Render with embedded services)
+        customer = get_customer_direct(pan.upper())
         
-        logger.info(f"KYC verification result: {result.get('status', 'failed')}")
-        return {
-            "verified": result.get("status") == "verified",
-            "message": "KYC verification complete",
-            "name": result.get("name", ""),
-            "pan": pan.upper()
-        }
+        if customer:
+            logger.info(f"KYC verification result: verified for {customer.get('name', 'Unknown')}")
+            return {
+                "verified": True,
+                "message": "KYC verification complete",
+                "name": customer.get('name', ''),
+                "pan": pan.upper()
+            }
+        else:
+            # If direct access fails, try HTTP fallback (local dev with separate services)
+            try:
+                result = call_api_with_retry(
+                    f"{CRM_URL}/verify-kyc",
+                    {"pan": pan.upper()}
+                )
+                logger.info(f"KYC verification result (via HTTP): {result.get('status', 'failed')}")
+                return {
+                    "verified": result.get("status") == "verified",
+                    "message": "KYC verification complete",
+                    "name": result.get("name", ""),
+                    "pan": pan.upper()
+                }
+            except Exception as http_error:
+                logger.error(f"Both direct and HTTP verification failed: {http_error}")
+                return {
+                    "verified": False,
+                    "error": "CRM service is currently unavailable. Please try again later."
+                }
         
-    except requests.Timeout:
-        logger.error("CRM service timeout")
-        return {
-            "verified": False,
-            "error": "CRM service is taking too long to respond. Please try again."
-        }
-    except requests.RequestException as e:
-        logger.error(f"CRM service error: {str(e)}")
-        return {
-            "verified": False,
-            "error": "CRM service is currently unavailable. Please try again later."
-        }
     except Exception as e:
         logger.error(f"Unexpected error in KYC verification: {str(e)}")
         return {
@@ -164,10 +206,18 @@ def underwriting_agent_tool(pan: str, amount: int, monthly_salary: int = 0):
     logger.info(f"Underwriting evaluation: PAN={pan[:4]}****, Amount={amount}, Salary={monthly_salary}")
     
     try:
-        # Fetch credit score (REQUIRED)
+        # Fetch credit score (REQUIRED) - try direct DB first, then HTTP fallback
+        credit_score = 0
         try:
-            credit_response = call_api_with_retry(f"{CREDIT_URL}/get-score", {"pan": pan})
-            credit_score = credit_response.get("credit_score", 0)
+            customer = get_customer_direct(pan)
+            if customer:
+                credit_score = customer.get("credit_score", 0)
+                logger.info(f"Credit score fetched (direct): {credit_score}")
+            else:
+                # Fallback to HTTP request
+                credit_response = call_api_with_retry(f"{CREDIT_URL}/get-score", {"pan": pan})
+                credit_score = credit_response.get("credit_score", 0)
+                logger.info(f"Credit score fetched (HTTP): {credit_score}")
         except Exception as e:
             logger.error(f"Credit bureau error: {str(e)}")
             return {
@@ -178,9 +228,15 @@ def underwriting_agent_tool(pan: str, amount: int, monthly_salary: int = 0):
         # Fetch pre-approved limit (OPTIONAL - if fails, use salary-based approval)
         pre_approved_limit = None
         try:
-            offer_response = call_api_with_retry(f"{OFFER_URL}/get-limit", {"pan": pan})
-            pre_approved_limit = offer_response.get("pre_approved_limit", 0)
-            logger.info(f"Credit Score: {credit_score}, Pre-approved Limit: {pre_approved_limit}")
+            customer = get_customer_direct(pan)
+            if customer:
+                pre_approved_limit = customer.get("pre_approved_limit")
+                logger.info(f"Pre-approved limit fetched (direct): {pre_approved_limit}")
+            else:
+                # Fallback to HTTP request
+                offer_response = call_api_with_retry(f"{OFFER_URL}/get-limit", {"pan": pan})
+                pre_approved_limit = offer_response.get("pre_approved_limit", 0)
+                logger.info(f"Pre-approved limit fetched (HTTP): {pre_approved_limit}")
         except Exception as e:
             logger.warning(f"Offer service error (non-fatal): {str(e)}")
             logger.info(f"Credit Score: {credit_score}, Pre-approved Limit: Not available (will use salary-based approval)")
